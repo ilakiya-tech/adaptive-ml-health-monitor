@@ -1,0 +1,2 @@
+timestamp,model_path,accuracy,precision,recall,f1_score
+2025-12-05 21:47:50,C:\Users\Dell\adaptive-ml-health-monitor\models\model_v1.pkl,0.921,0.9475806451612904,0.7807308970099668,0.8561020036429873
