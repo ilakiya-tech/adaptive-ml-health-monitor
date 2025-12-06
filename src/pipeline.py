@@ -1,221 +1,187 @@
+"""
+End-to-end pipeline orchestrator for the adaptive ML health monitoring system.
+Coordinates training, monitoring, drift detection, and retraining.
+"""
+
+import logging
 import subprocess
 import sys
-import pandas as pd
 from pathlib import Path
+from typing import Dict, Optional
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+PROJECT_ROOT = Path(__file__).parent.parent
+MODEL_PATH = PROJECT_ROOT / "models" / "model_v1.pkl"
+DRIFT_LOG_PATH = PROJECT_ROOT / "data" / "drift_log.csv"
+METRICS_PATH = PROJECT_ROOT / "data" / "metrics.csv"
+
 
 def ensure_initial_model():
     """
-    Check if the initial model exists. If not, automatically run train.py.
-    This is critical for Streamlit Cloud deployments where models/ is empty.
+    Ensure that an initial model exists. Train one if it doesn't.
     """
-    model_path = Path("models/model_v1.pkl")
-    
-    print("\n[PRE-CHECK] Verifying initial model exists...")
-    
-    if model_path.exists():
-        print(f"[OK] Found existing model at {model_path}")
-        return
-    
-    print(f"[WARN] Model not found at {model_path}")
-    print("[INFO] Running train.py to create initial model...")
-    
-    try:
-        result = subprocess.run(
-            [sys.executable, "src/train.py"],
-            capture_output=True,
-            text=True,
-            check=True
-        )
-        print("[OK] train.py completed successfully")
-        if result.stdout:
-            print(result.stdout)
-        
-        # Verify model was created
-        if model_path.exists():
-            print(f"[OK] Initial model created at {model_path}")
-        else:
-            print("[ERROR] train.py completed but model file was not created")
-            sys.exit(1)
-            
-    except subprocess.CalledProcessError as e:
-        print("[ERROR] train.py failed with error:")
-        print(e.stderr)
-        sys.exit(1)
-    except Exception as e:
-        print(f"[ERROR] Error running train.py: {e}")
-        sys.exit(1)
+    if not MODEL_PATH.exists():
+        logger.info("No trained model found. Training initial model...")
+        try:
+            result = subprocess.run(
+                [sys.executable, "src/train.py"],
+                check=True,
+                capture_output=True,
+                text=True
+            )
+            logger.info("Initial model training completed")
+            logger.info(result.stdout)
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Model training failed: {e.stderr}")
+            raise
+    else:
+        logger.info(f"Model already exists at {MODEL_PATH}")
 
 
-def run_pipeline():
+def run_monitoring() -> bool:
     """
-    Main pipeline that orchestrates monitoring, drift detection, and retraining.
+    Run the monitoring script to evaluate model performance.
+    
+    Returns:
+        True if monitoring succeeded, False otherwise.
     """
-    print("=" * 60)
-    print("ADAPTIVE ML HEALTH MONITOR - PIPELINE STARTED")
-    print("=" * 60)
-    
-    # Pre-check: Ensure initial model exists (critical for Streamlit Cloud)
-    ensure_initial_model()
-    
-    # Step 1: Run monitor.py
-    print("\n[STEP 1] Running monitor.py...")
+    logger.info("Running performance monitoring...")
     try:
         result = subprocess.run(
             [sys.executable, "src/monitor.py"],
+            check=True,
             capture_output=True,
-            text=True,
-            check=True
+            text=True
         )
-        print("[OK] monitor.py completed successfully")
-        if result.stdout:
-            print(result.stdout)
+        logger.info("Monitoring completed successfully")
+        logger.info(result.stdout)
+        return True
     except subprocess.CalledProcessError as e:
-        print("[ERROR] monitor.py failed with error:")
-        print(e.stderr)
-        sys.exit(1)
-    except Exception as e:
-        print(f"[ERROR] Error running monitor.py: {e}")
-        sys.exit(1)
+        logger.error(f"Monitoring failed: {e.stderr}")
+        return False
+
+
+def run_drift_detection() -> Optional[Dict]:
+    """
+    Run drift detection to check for model degradation.
     
-    # Step 2: Run drift.py
-    print("\n[STEP 2] Running drift.py...")
+    Returns:
+        Dictionary with drift results, or None if detection failed.
+    """
+    logger.info("Running drift detection...")
     try:
         result = subprocess.run(
             [sys.executable, "src/drift.py"],
+            check=True,
             capture_output=True,
-            text=True,
-            check=True
+            text=True
         )
-        print("[OK] drift.py completed successfully")
-        if result.stdout:
-            print(result.stdout)
+        logger.info("Drift detection completed")
+        logger.info(result.stdout)
+        
+        if DRIFT_LOG_PATH.exists():
+            import pandas as pd
+            df = pd.read_csv(DRIFT_LOG_PATH)
+            if len(df) > 0:
+                latest = df.iloc[-1].to_dict()
+                return latest
+        return None
     except subprocess.CalledProcessError as e:
-        print("[ERROR] drift.py failed with error:")
-        print(e.stderr)
-        sys.exit(1)
-    except Exception as e:
-        print(f"[ERROR] Error running drift.py: {e}")
-        sys.exit(1)
+        logger.error(f"Drift detection failed: {e.stderr}")
+        return None
+
+
+def run_retraining() -> bool:
+    """
+    Run model retraining script.
     
-    # Step 3: Read drift log
-    print("\n[STEP 3] Reading drift_log.csv...")
-    drift_log_path = Path("data/drift_log.csv")
+    Returns:
+        True if retraining succeeded, False otherwise.
+    """
+    logger.info("Running model retraining...")
+    try:
+        result = subprocess.run(
+            [sys.executable, "src/retrain.py"],
+            check=True,
+            capture_output=True,
+            text=True
+        )
+        logger.info("Retraining completed successfully")
+        logger.info(result.stdout)
+        return True
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Retraining failed: {e.stderr}")
+        return False
+
+
+def run_pipeline(force_retrain: bool = False):
+    """
+    Execute the complete ML pipeline.
     
-    if not drift_log_path.exists():
-        print("[ERROR] drift_log.csv not found. Cannot proceed with drift detection.")
-        sys.exit(1)
+    Steps:
+        1. Ensure initial model exists
+        2. Run monitoring
+        3. Check for drift
+        4. Retrain if drift detected or forced
+    
+    Args:
+        force_retrain: If True, skip drift check and retrain immediately.
+    """
+    logger.info("=" * 70)
+    logger.info("STARTING ML PIPELINE")
+    logger.info("=" * 70)
     
     try:
-        drift_df = pd.read_csv(drift_log_path)
+        ensure_initial_model()
         
-        if drift_df.empty:
-            print("[ERROR] drift_log.csv is empty. Cannot detect drift.")
-            sys.exit(1)
+        monitoring_success = run_monitoring()
+        if not monitoring_success:
+            logger.warning("Monitoring failed, but continuing pipeline...")
         
-        print(f"[OK] Loaded drift_log.csv with {len(drift_df)} rows")
-        
-        # Step 4: Detect drift
-        print("\n[STEP 4] Detecting drift...")
-        
-        # Get the latest row
-        latest_row = drift_df.iloc[-1]
-        
-        # Try different possible column names for drift detection
-        drift_column_names = ['drift', 'drift_detected', 'is_drift', 'drift_flag']
-        drift_detected = False
-        drift_column_found = None
-        
-        for col_name in drift_column_names:
-            if col_name in drift_df.columns:
-                drift_column_found = col_name
-                drift_value = latest_row[col_name]
-                
-                # Handle different data types
-                if isinstance(drift_value, bool):
-                    drift_detected = drift_value
-                elif isinstance(drift_value, str):
-                    drift_detected = drift_value.lower() in ['true', 'yes', '1', 'drift']
-                elif isinstance(drift_value, (int, float)):
-                    drift_detected = bool(drift_value)
-                
-                break
-        
-        if drift_column_found is None:
-            print(f"[WARN] Warning: No drift column found. Checked columns: {drift_column_names}")
-            print(f"Available columns: {list(drift_df.columns)}")
-            print("Assuming no drift detected.")
-            drift_detected = False
+        if force_retrain:
+            logger.info("Force retraining requested")
+            retrain_success = run_retraining()
+            if retrain_success:
+                logger.info("Forced retraining completed successfully")
+            else:
+                logger.error("Forced retraining failed")
         else:
-            print(f"[OK] Drift column found: '{drift_column_found}'")
-            print(f"  Latest drift status: {drift_detected}")
+            drift_result = run_drift_detection()
+            
+            if drift_result and drift_result.get('drift_detected'):
+                logger.warning("Drift detected! Triggering retraining...")
+                retrain_success = run_retraining()
+                if retrain_success:
+                    logger.info("Retraining completed successfully")
+                    run_monitoring()
+                else:
+                    logger.error("Retraining failed")
+            else:
+                logger.info("No drift detected. Model is performing well.")
         
-        # Step 5: Trigger retraining if drift detected
-        if drift_detected:
-            print("\n[STEP 5] Drift detected! Triggering retraining...")
-            try:
-                # Import and call retrain.py's main function
-                sys.path.insert(0, str(Path("src").resolve()))
-                import retrain
-                
-                print("Starting retrain.main()...")
-                retrain.main()
-                print("[OK] Retraining completed successfully")
-                
-            except Exception as e:
-                print(f"[ERROR] Error during retraining: {e}")
-                sys.exit(1)
-        else:
-            print("\n[STEP 5] No drift detected. Skipping retraining.")
-        
-        print("\n" + "=" * 60)
-        print("PIPELINE COMPLETED SUCCESSFULLY")
-        print("=" * 60)
+        logger.info("=" * 70)
+        logger.info("ML PIPELINE COMPLETED")
+        logger.info("=" * 70)
         
     except Exception as e:
-        print(f"[ERROR] Error processing drift_log.csv: {e}")
-        sys.exit(1)
+        logger.error(f"Pipeline failed: {e}")
+        raise
 
 
 if __name__ == "__main__":
-    run_pipeline()
-```
-
-## Explanation of Changes
-
-### What was added:
-
-1. **New function `ensure_initial_model()`**:
-   - Checks if `models/model_v1.pkl` exists
-   - If missing, automatically runs `src/train.py` using `subprocess.run()`
-   - Captures and displays training output
-   - Verifies the model was actually created after training completes
-   - Exits with error if training fails
-
-2. **Pre-check step in `run_pipeline()`**:
-   - Added `ensure_initial_model()` call at the very beginning
-   - Runs before monitor.py to guarantee a model exists
-   - Prints clear logs for debugging in Streamlit Cloud
-
-### Why this solves your problem:
-
-- **Streamlit Cloud**: When deployed, the fresh environment has empty `models/` folder. The pipeline now detects this and automatically trains the initial model before attempting monitoring.
-
-- **Local development**: If you already have `model_v1.pkl`, the check passes immediately and skips training, so there's no performance impact.
-
-- **Reliability**: The solution works identically in both environments without requiring manual intervention.
-
-### How it works:
-```
-Pipeline Start
-    ↓
-[PRE-CHECK] Does model_v1.pkl exist?
-    ↓ NO → Run train.py → Create model_v1.pkl
-    ↓ YES → Skip training
-    ↓
-[STEP 1] monitor.py (model now guaranteed to exist)
-    ↓
-[STEP 2] drift.py
-    ↓
-[STEP 3-5] Check drift → retrain if needed
-    ↓
-Pipeline Complete
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Run the ML pipeline")
+    parser.add_argument(
+        "--force-retrain",
+        action="store_true",
+        help="Force model retraining regardless of drift detection"
+    )
+    
+    args = parser.parse_args()
+    run_pipeline(force_retrain=args.force_retrain)
