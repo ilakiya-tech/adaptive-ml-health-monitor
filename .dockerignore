@@ -1,0 +1,18 @@
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+
+# Local data & models (they can be regenerated)
+data/
+models/
+
+# Git stuff
+.git
+.gitignore
+
+# OS / editor stuff
+.DS_Store
+.vscode/
