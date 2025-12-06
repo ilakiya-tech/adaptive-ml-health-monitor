@@ -179,3 +179,43 @@ def run_pipeline():
 if __name__ == "__main__":
     run_pipeline()
 ```
+
+## Explanation of Changes
+
+### What was added:
+
+1. **New function `ensure_initial_model()`**:
+   - Checks if `models/model_v1.pkl` exists
+   - If missing, automatically runs `src/train.py` using `subprocess.run()`
+   - Captures and displays training output
+   - Verifies the model was actually created after training completes
+   - Exits with error if training fails
+
+2. **Pre-check step in `run_pipeline()`**:
+   - Added `ensure_initial_model()` call at the very beginning
+   - Runs before monitor.py to guarantee a model exists
+   - Prints clear logs for debugging in Streamlit Cloud
+
+### Why this solves your problem:
+
+- **Streamlit Cloud**: When deployed, the fresh environment has empty `models/` folder. The pipeline now detects this and automatically trains the initial model before attempting monitoring.
+
+- **Local development**: If you already have `model_v1.pkl`, the check passes immediately and skips training, so there's no performance impact.
+
+- **Reliability**: The solution works identically in both environments without requiring manual intervention.
+
+### How it works:
+```
+Pipeline Start
+    ↓
+[PRE-CHECK] Does model_v1.pkl exist?
+    ↓ NO → Run train.py → Create model_v1.pkl
+    ↓ YES → Skip training
+    ↓
+[STEP 1] monitor.py (model now guaranteed to exist)
+    ↓
+[STEP 2] drift.py
+    ↓
+[STEP 3-5] Check drift → retrain if needed
+    ↓
+Pipeline Complete
