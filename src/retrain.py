@@ -1,200 +1,251 @@
 """
-Automated model retraining module.
-Handles retraining triggers, data preparation, and model deployment.
+retrain.py
+
+Retrain the churn model, version it, and log metrics.
+
+Features:
+- Load or create dataset (data/churn.csv)
+- Train RandomForestClassifier
+- Auto-increment model version: model_v1.pkl -> model_v2.pkl -> ...
+- Evaluate accuracy, precision, recall, f1
+- Save new model under models/model_v{n}.pkl
+- Append metrics to data/metrics.csv
 """
 
-import logging
-from typing import Dict, Tuple, Any
-import pandas as pd
-import numpy as np
+import os
+from pathlib import Path
 from datetime import datetime
+import re
 
-import config
-import utils
-from train import ModelTrainer
-from drift import DriftDetector
-from monitor import PerformanceMonitor
+import pandas as pd
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import (
+    accuracy_score,
+    precision_score,
+    recall_score,
+    f1_score,
+)
+from sklearn.datasets import make_classification
+import joblib
 
 
-logger = logging.getLogger(__name__)
+# -------------------------------------------------------------------
+# Paths & constants
+# -------------------------------------------------------------------
+
+BASE_DIR = Path(__file__).resolve().parents[1]  # project root (adaptive-ml-health-monitor/)
+DATA_DIR = BASE_DIR / "data"
+MODELS_DIR = BASE_DIR / "models"
+
+DATA_FILE = DATA_DIR / "churn.csv"
+METRICS_FILE = DATA_DIR / "metrics.csv"
+
+MODEL_PREFIX = "model_v"
+MODEL_EXTENSION = ".pkl"
 
 
-class ModelRetrainer:
+# -------------------------------------------------------------------
+# Dataset utilities
+# -------------------------------------------------------------------
+
+def create_synthetic_dataset(n_samples: int = 1000, n_features: int = 20) -> pd.DataFrame:
     """
-    Manages automated model retraining process.
-    
-    Attributes:
-        current_model: Currently deployed model.
-        trainer: ModelTrainer instance for retraining.
-        drift_detector: DriftDetector for checking drift status.
-        monitor: PerformanceMonitor for checking performance.
+    Fallback: create a synthetic churn-like dataset if churn.csv does not exist.
     """
-    
-    def __init__(self):
-        """
-        Initialize the ModelRetrainer.
-        
-        TODO: Load current model and initialize components.
-        """
-        pass
-    
-    def check_retrain_triggers(self) -> Dict[str, bool]:
-        """
-        Check all retraining trigger conditions.
-        
-        Returns:
-            Dictionary of trigger names and their status.
-        
-        TODO: Check drift, performance, time-based triggers.
-        """
-        pass
-    
-    def should_retrain(self, triggers: Dict[str, bool]) -> bool:
-        """
-        Determine if retraining should be triggered.
-        
-        Args:
-            triggers: Dictionary of trigger conditions.
-        
-        Returns:
-            True if retraining should occur, False otherwise.
-        
-        TODO: Evaluate trigger conditions based on config.
-        """
-        pass
-    
-    def load_historical_data(self) -> pd.DataFrame:
-        """
-        Load historical training data.
-        
-        Returns:
-            Historical training DataFrame.
-        
-        TODO: Load from config.TRAIN_DATA_PATH.
-        """
-        pass
-    
-    def load_recent_production_data(self, n_samples: int = None) -> pd.DataFrame:
-        """
-        Load recent production data for retraining.
-        
-        Args:
-            n_samples: Number of recent samples. Uses config value if None.
-        
-        Returns:
-            Recent production data DataFrame.
-        
-        TODO: Load last N samples from production data.
-        """
-        pass
-    
-    def prepare_retraining_data(self) -> Tuple[pd.DataFrame, pd.Series]:
-        """
-        Combine historical and recent data for retraining.
-        
-        Returns:
-            Tuple of (X_train, y_train).
-        
-        TODO: Merge historical and production data, handle class imbalance.
-        """
-        pass
-    
-    def retrain_model(self, X_train: pd.DataFrame, y_train: pd.Series) -> Any:
-        """
-        Retrain model with updated data.
-        
-        Args:
-            X_train: Training features.
-            y_train: Training target.
-        
-        Returns:
-            Newly trained model.
-        
-        TODO: Use ModelTrainer to train new model.
-        """
-        pass
-    
-    def validate_new_model(self, old_model: Any, new_model: Any, 
-                          validation_data: Tuple[pd.DataFrame, pd.Series]) -> Dict[str, Any]:
-        """
-        Validate new model against old model.
-        
-        Args:
-            old_model: Current production model.
-            new_model: Newly trained model.
-            validation_data: Tuple of (X_val, y_val).
-        
-        Returns:
-            Dictionary containing comparison metrics.
-        
-        TODO: Compare performance of old vs new model.
-        """
-        pass
-    
-    def should_deploy_new_model(self, validation_results: Dict[str, Any]) -> bool:
-        """
-        Decide whether to deploy the new model.
-        
-        Args:
-            validation_results: Results from model validation.
-        
-        Returns:
-            True if new model should be deployed, False otherwise.
-        
-        TODO: Check if new model improves on old model.
-        """
-        pass
-    
-    def backup_current_model(self) -> None:
-        """
-        Backup current production model before replacement.
-        
-        TODO: Save current model with timestamp.
-        """
-        pass
-    
-    def deploy_model(self, new_model: Any, metadata: Dict[str, Any]) -> None:
-        """
-        Deploy the retrained model to production.
-        
-        Args:
-            new_model: Newly trained model to deploy.
-            metadata: Metadata about the new model.
-        
-        TODO: Save new model to config.MODEL_PATH, update metadata.
-        """
-        pass
-    
-    def log_retrain_event(self, event_data: Dict[str, Any]) -> None:
-        """
-        Log retraining event details.
-        
-        Args:
-            event_data: Dictionary containing retraining details.
-        
-        TODO: Log to config.RETRAIN_LOG_PATH.
-        """
-        pass
-    
-    def run_retrain_pipeline(self) -> Dict[str, Any]:
-        """
-        Execute the complete retraining pipeline.
-        
-        Returns:
-            Dictionary containing retraining results.
-        
-        TODO: Check triggers, prepare data, retrain, validate, deploy.
-        """
-        pass
+    X, y = make_classification(
+        n_samples=n_samples,
+        n_features=n_features,
+        n_informative=10,
+        n_redundant=2,
+        n_repeated=0,
+        n_classes=2,
+        random_state=42,
+    )
 
+    feature_cols = [f"feature_{i}" for i in range(n_features)]
+    df = pd.DataFrame(X, columns=feature_cols)
+    df["target"] = y
+    return df
+
+
+def load_or_create_dataset() -> tuple[pd.DataFrame, pd.Series]:
+    """
+    Load dataset from data/churn.csv if it exists, otherwise create and save a synthetic one.
+
+    Assumes: last column is the target.
+    """
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+    if DATA_FILE.exists():
+        df = pd.read_csv(DATA_FILE)
+        print(f"[INFO] Loaded existing dataset from {DATA_FILE}")
+    else:
+        print("[WARN] Dataset not found. Creating a synthetic dataset...")
+        df = create_synthetic_dataset()
+        df.to_csv(DATA_FILE, index=False)
+        print(f"[INFO] Synthetic dataset saved to {DATA_FILE}")
+
+    if df.shape[1] < 2:
+        raise ValueError("Dataset must contain at least 1 feature column and 1 target column.")
+
+    # Assume last column is target
+    target_col = df.columns[-1]
+    X = df.drop(columns=[target_col])
+    y = df[target_col]
+
+    print(f"[INFO] Features shape: {X.shape}, Target column: '{target_col}'")
+    return X, y
+
+
+# -------------------------------------------------------------------
+# Model versioning utilities
+# -------------------------------------------------------------------
+
+def get_existing_model_versions() -> list[int]:
+    """
+    Return a sorted list of existing model version numbers.
+    Looks for files named model_v{n}.pkl in models/.
+    """
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+
+    versions = []
+    for path in MODELS_DIR.glob(f"{MODEL_PREFIX}*{MODEL_EXTENSION}"):
+        match = re.search(rf"{MODEL_PREFIX}(\d+){MODEL_EXTENSION}$", path.name)
+        if match:
+            versions.append(int(match.group(1)))
+
+    return sorted(versions)
+
+
+def get_next_model_path() -> tuple[int, Path]:
+    """
+    Determine the next model version and its file path.
+    If no models exist, start with model_v1.pkl.
+    """
+    versions = get_existing_model_versions()
+    next_version = 1 if not versions else max(versions) + 1
+    model_path = MODELS_DIR / f"{MODEL_PREFIX}{next_version}{MODEL_EXTENSION}"
+    return next_version, model_path
+
+
+# -------------------------------------------------------------------
+# Training & evaluation
+# -------------------------------------------------------------------
+
+def train_model(X: pd.DataFrame, y: pd.Series) -> tuple[RandomForestClassifier, dict]:
+    """
+    Train RandomForestClassifier and compute evaluation metrics.
+    Returns:
+        model, metrics_dict
+    """
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42, stratify=y
+    )
+
+    model = RandomForestClassifier(
+        n_estimators=200,
+        max_depth=None,
+        random_state=42,
+        n_jobs=-1,
+    )
+
+    print("[INFO] Training RandomForest model...")
+    model.fit(X_train, y_train)
+
+    y_pred = model.predict(X_test)
+
+    metrics = {
+        "accuracy": accuracy_score(y_test, y_pred),
+        "precision": precision_score(y_test, y_pred, zero_division=0),
+        "recall": recall_score(y_test, y_pred, zero_division=0),
+        "f1": f1_score(y_test, y_pred, zero_division=0),
+    }
+
+    return model, metrics
+
+
+# -------------------------------------------------------------------
+# Persistence & logging
+# -------------------------------------------------------------------
+
+def save_model(model, model_path: Path) -> None:
+    """
+    Save the trained model to models/model_v{n}.pkl.
+    """
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    joblib.dump(model, model_path)
+    print(f"[INFO] Saved model to {model_path}")
+
+
+def log_metrics(model_version: int, metrics: dict) -> None:
+    """
+    Append a new metrics row to data/metrics.csv.
+    Columns: timestamp, model_version, accuracy, precision, recall, f1
+    """
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+    row = {
+        "timestamp": datetime.utcnow().isoformat(),
+        "model_version": model_version,
+        "accuracy": metrics["accuracy"],
+        "precision": metrics["precision"],
+        "recall": metrics["recall"],
+        "f1": metrics["f1"],
+    }
+
+    df_row = pd.DataFrame([row])
+
+    if METRICS_FILE.exists():
+        existing = pd.read_csv(METRICS_FILE)
+        # Optional: keep only common columns if schema differs slightly
+        common_cols = [c for c in existing.columns if c in df_row.columns]
+        if common_cols:
+            existing = existing[common_cols]
+            df_row = df_row[common_cols]
+        df_out = pd.concat([existing, df_row], ignore_index=True)
+    else:
+        df_out = df_row
+
+    df_out.to_csv(METRICS_FILE, index=False)
+    print(f"[INFO] Logged metrics to {METRICS_FILE}")
+
+
+# -------------------------------------------------------------------
+# Main entry point
+# -------------------------------------------------------------------
 
 def main():
-    """
-    Main entry point for automated retraining.
-    
-    TODO: Initialize retrainer and run pipeline.
-    """
-    pass
+    print("=" * 60)
+    print("       Adaptive ML Health Monitor - Retrain Pipeline")
+    print("=" * 60)
+
+    # 1) Load or create dataset
+    X, y = load_or_create_dataset()
+
+    # 2) Determine next model version and path
+    next_version, model_path = get_next_model_path()
+    print(f"[INFO] Next model version will be: v{next_version}")
+    print(f"[INFO] Model file: {model_path.name}")
+
+    # 3) Train model and get metrics
+    model, metrics = train_model(X, y)
+
+    # 4) Save model
+    save_model(model, model_path)
+
+    # 5) Log metrics
+    log_metrics(next_version, metrics)
+
+    # 6) Pretty print results
+    print("\n[RESULT] Retraining completed.")
+    print(f"         Model version: v{next_version}")
+    print(f"         Saved at     : {model_path}")
+    print("         Metrics:")
+    for k, v in metrics.items():
+        print(f"           - {k:9s}: {v:.4f}")
+
+    print("\n[OK] Done")
 
 
 if __name__ == "__main__":

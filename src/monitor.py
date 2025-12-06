@@ -295,9 +295,9 @@ def run_monitoring():
         metrics = evaluate_model(model, X_test, y_test)
         
         # Step 6: Print clear accuracy message
-        print("\n" + "🎯" * 30)
+        print("\n" + "=" * 60)
         print(f"   MODEL ACCURACY: {metrics['accuracy']:.2%}")
-        print("🎯" * 30 + "\n")
+        print("=" * 60 + "\n")
         
         # Step 7: Log metrics to CSV
         log_metrics_to_csv(metrics, MODEL_PATH, METRICS_LOG_PATH)

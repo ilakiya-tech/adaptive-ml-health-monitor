@@ -1,0 +1,14 @@
+# Python cache
+__pycache__/
+*.pyc
+
+# Virtual environment
+venv/
+
+# Data and model artifacts (can be regenerated)
+data/
+models/
+
+# OS / editor stuff
+.DS_Store
+.vscode/
