@@ -3,6 +3,49 @@ import sys
 import pandas as pd
 from pathlib import Path
 
+def ensure_initial_model():
+    """
+    Check if the initial model exists. If not, automatically run train.py.
+    This is critical for Streamlit Cloud deployments where models/ is empty.
+    """
+    model_path = Path("models/model_v1.pkl")
+    
+    print("\n[PRE-CHECK] Verifying initial model exists...")
+    
+    if model_path.exists():
+        print(f"[OK] Found existing model at {model_path}")
+        return
+    
+    print(f"[WARN] Model not found at {model_path}")
+    print("[INFO] Running train.py to create initial model...")
+    
+    try:
+        result = subprocess.run(
+            [sys.executable, "src/train.py"],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        print("[OK] train.py completed successfully")
+        if result.stdout:
+            print(result.stdout)
+        
+        # Verify model was created
+        if model_path.exists():
+            print(f"[OK] Initial model created at {model_path}")
+        else:
+            print("[ERROR] train.py completed but model file was not created")
+            sys.exit(1)
+            
+    except subprocess.CalledProcessError as e:
+        print("[ERROR] train.py failed with error:")
+        print(e.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"[ERROR] Error running train.py: {e}")
+        sys.exit(1)
+
+
 def run_pipeline():
     """
     Main pipeline that orchestrates monitoring, drift detection, and retraining.
@@ -10,6 +53,9 @@ def run_pipeline():
     print("=" * 60)
     print("ADAPTIVE ML HEALTH MONITOR - PIPELINE STARTED")
     print("=" * 60)
+    
+    # Pre-check: Ensure initial model exists (critical for Streamlit Cloud)
+    ensure_initial_model()
     
     # Step 1: Run monitor.py
     print("\n[STEP 1] Running monitor.py...")
@@ -132,3 +178,4 @@ def run_pipeline():
 
 if __name__ == "__main__":
     run_pipeline()
+```
